@@ -1,4 +1,5 @@
 import { isRemote } from 'pouchdb-utils';
+import {liveFind} from './newchanges';
 
 (function() {
     let vue = null,
@@ -813,8 +814,7 @@ import { isRemote } from 'pouchdb-utils';
                         let aggregateCache = [];
 
                         // the LiveFind plugin returns a liveFeed object
-                        vm._liveFeeds[key] = db
-                            .liveFind({
+                        vm._liveFeeds[key] = liveFind(db, {
                                 selector: selector,
                                 sort: sort,
                                 skip: skip,
