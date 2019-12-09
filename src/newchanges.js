@@ -10,7 +10,7 @@ var massageSort = utils.massageSort;
 
 function liveFind(db, requestDef) {
 
-  if(typeof this.find !== 'function') {
+  if(typeof db.find !== 'function') {
     throw new Error('ERROR: PouchDB Find is a requirement for LiveFind and must be loaded first.');
   }
 
