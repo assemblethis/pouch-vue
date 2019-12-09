@@ -1,5 +1,5 @@
 import { isRemote } from 'pouchdb-utils';
-import {liveFind} from './newchanges';
+import { liveFind } from './newchanges';
 
 (function() {
     let vue = null,
