@@ -225,23 +225,29 @@ function liveFind(db, requestDef) {
 
         if (doc._deleted && lookup[id]) {
             lookup[id] = null;
-            return removeAction({ _id: id, _rev: rev, deleted: true }, id, rev);
+            removeAction({ _id: id, _rev: rev, deleted: true }, id, rev);
+            console.timeEnd('LiveFind');
+            return;
         }
         var outputDoc = filterDoc(doc);
         if (!outputDoc && lookup[id]) {
             lookup[id] = null;
-            return removeAction({ _id: id, _rev: rev }, id, rev);
+            removeAction({ _id: id, _rev: rev }, id, rev);
+            console.timeEnd('LiveFind');
+            return;
         }
         if (outputDoc && !lookup[id]) {
             lookup[id] = rev;
-            return addAction(pickFields(outputDoc), id, rev);
+            addAction(pickFields(outputDoc), id, rev);
+            console.timeEnd('LiveFind');
+            return;
         }
         if (outputDoc && lookup[id]) {
             lookup[id] = rev;
-            return updateAction(pickFields(outputDoc), id, rev);
+            updateAction(pickFields(outputDoc), id, rev);
+            console.timeEnd('LiveFind');
+            return;
         }
-
-        console.timeEnd('LiveFind')
 
     }
 
