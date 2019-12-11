@@ -19,7 +19,6 @@ function liveFind(db, requestDef) {
     var cancelled = false;
     var lookup = {};
     var emitter = new EventEmitter();
-    var docList = [];
     var docList2 = [];    
     var aggregate = requestDef.aggregate || false;
 
@@ -138,28 +137,6 @@ function liveFind(db, requestDef) {
         });
     }
 
-    function filterDoc(doc) {
-        var result = helpers.memoryFilter([doc], { selector: selector });
-        if (result.length) {
-            return result[0];
-        }
-        return null;
-    }
-
-    function pickFields(doc) {
-        if (fields) {
-            var output = utils.pick(doc, fields);
-            if (stripId) {
-                delete output._id;
-            }
-            if (stripRev) {
-                delete output._rev;
-            }
-            return output;
-        }
-        return doc;
-    }
-
     // This processes the initial results of the query
     function addResult2(doc) {
       //lookup[doc._id] = doc._rev;
@@ -173,21 +150,6 @@ function liveFind(db, requestDef) {
       }
       return addAction2(doc, id, rev);
   }
-
-
-    // This processes the initial results of the query
-    function addResult(doc) {
-        lookup[doc._id] = doc._rev;
-        var id = doc._id;
-        var rev = doc._rev;
-        if (stripId) {
-            delete doc._id;
-        }
-        if (stripRev) {
-            delete doc._rev;
-        }
-        return addAction(doc, id, rev);
-    }
 
     function processChange(doc) {
         // Don't fire an update if this rev has already been processed
@@ -218,72 +180,13 @@ function liveFind(db, requestDef) {
         });
 
         console.timeEnd('RegularFind')
-
-        // use liveFind
-
-        console.time('LiveFind')
-
-        if (doc._deleted && lookup[id]) {
-            lookup[id] = null;
-            removeAction({ _id: id, _rev: rev, deleted: true }, id, rev);
-            console.timeEnd('LiveFind');
-            return;
-        }
-        var outputDoc = filterDoc(doc);
-        if (!outputDoc && lookup[id]) {
-            lookup[id] = null;
-            removeAction({ _id: id, _rev: rev }, id, rev);
-            console.timeEnd('LiveFind');
-            return;
-        }
-        if (outputDoc && !lookup[id]) {
-            lookup[id] = rev;
-            addAction(pickFields(outputDoc), id, rev);
-            console.timeEnd('LiveFind');
-            return;
-        }
-        if (outputDoc && lookup[id]) {
-            lookup[id] = rev;
-            updateAction(pickFields(outputDoc), id, rev);
-            console.timeEnd('LiveFind');
-            return;
-        }
-
-    }
-
-    function removeAction(doc, id, rev) {
-        var list;
-        if (aggregate) {
-            docList = docList.filter(function(item) {
-                return item._id !== doc._id;
-            });
-            list = formatList(docList);
-        }
-        emitter.emit(
-            'update',
-            { action: 'REMOVE', id: id, rev: rev, doc: doc },
-            list
-        );
-    }
-
-    function addAction(doc, id, rev) {
-        var list;
-        if (aggregate) {
-            docList = docList.concat(doc);
-            list = formatList(docList);
-        }
-        emitter.emit(
-            'update',
-            { action: 'ADD', id: id, rev: rev, doc: doc },
-            list
-        );
     }
 
     function addAction2(doc, id, rev) {
       var list;
       if (aggregate) {
-          docList2 = docList.concat(doc);
-          list = formatList(docList);
+          docList2 = docList2.concat(doc);
+          list = formatList(docList2);
       }
       emitter.emit(
           'update2',
@@ -291,32 +194,6 @@ function liveFind(db, requestDef) {
           list
       );
   }
-
-
-
-    function updateAction(doc, id, rev) {
-        var list;
-        if (aggregate) {
-            docList = docList.map(function(item) {
-                return item._id === doc._id ? doc : item;
-            });
-            list = formatList(docList);
-        }
-        emitter.emit(
-            'update',
-            { action: 'UPDATE', id: id, rev: rev, doc: doc },
-            list
-        );
-    }
-
-    /* function sortList(list) {
-    list = list.sort(sortFn);
-    if (typeof sort[0] !== 'string' &&
-      getValue(sort[0]) === 'desc') {
-      list = list.reverse();
-    }
-    return list;
-  } */
 
     function sortList(list) {
         return list.sort(sortFn);
@@ -351,7 +228,7 @@ function liveFind(db, requestDef) {
             sort = massageSort(options.sort);
             sortFn = helpers.createFieldSorter(sort);
         }
-        return formatList(docList);
+        return formatList(docList2);
     }
 
     return emitter;
