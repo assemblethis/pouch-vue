@@ -4,7 +4,7 @@ var helpers = require('./helpers');
 var collate = require('pouchdb-collate').collate;
 var selectorCore = require('pouchdb-selector-core');
 var utils = require('./utils');
-var getValue = selectorCore.getValue;
+//var getValue = selectorCore.getValue;
 var massageSelector = selectorCore.massageSelector;
 var massageSort = utils.massageSort;
 
@@ -17,9 +17,8 @@ function liveFind(db, requestDef) {
 
     //var db = this;
     var cancelled = false;
-    var lookup = {};
     var emitter = new EventEmitter();
-    var docList2 = [];    
+    var docList = [];    
     var aggregate = requestDef.aggregate || false;
 
     // Normalize the request options
@@ -138,8 +137,7 @@ function liveFind(db, requestDef) {
     }
 
     // This processes the initial results of the query
-    function addResult2(doc) {
-      //lookup[doc._id] = doc._rev;
+    function addResult(doc) {
       var id = doc._id;
       var rev = doc._rev;
       if (stripId) {
@@ -148,15 +146,10 @@ function liveFind(db, requestDef) {
       if (stripRev) {
           delete doc._rev;
       }
-      return addAction2(doc, id, rev);
+      return addAction(doc, id, rev);
   }
 
     function processChange(doc) {
-        // Don't fire an update if this rev has already been processed
-        if (lookup[doc._id] === doc._rev) {
-            // console.warn('A change was fired twice. This shouldn\'t happen.');
-            return;
-        }
         var id = doc._id;
         var rev = doc._rev;
 
@@ -166,10 +159,10 @@ function liveFind(db, requestDef) {
         db
         .find(findRequest)
         .then(function(results) {
-            // clear docList2 and create a new array
-            docList2 = [];    
+            // clear docList and create a new array
+            docList = [];    
             results.docs.forEach(function(doc) {
-                addResult2(doc);
+                addResult(doc);
             });
             emitter.emit('ready');
         })
@@ -182,11 +175,11 @@ function liveFind(db, requestDef) {
         console.timeEnd('RegularFind')
     }
 
-    function addAction2(doc, id, rev) {
+    function addAction(doc, id, rev) {
       var list;
       if (aggregate) {
-          docList2 = docList2.concat(doc);
-          list = formatList(docList2);
+          docList = docList.concat(doc);
+          list = formatList(docList);
       }
       emitter.emit(
           'update',
@@ -228,7 +221,7 @@ function liveFind(db, requestDef) {
             sort = massageSort(options.sort);
             sortFn = helpers.createFieldSorter(sort);
         }
-        return formatList(docList2);
+        return formatList(docList);
     }
 
     return emitter;
