@@ -171,10 +171,10 @@ function liveFind(db, requestDef) {
             results.docs.forEach(function(doc) {
                 addResult2(doc);
             });
-            emitter.emit('ready2');
+            emitter.emit('ready');
         })
         .catch(function(err) {
-            emitter.emit('error2', err);
+            emitter.emit('error', err);
             cancel();
             throw err;
         });
@@ -189,7 +189,7 @@ function liveFind(db, requestDef) {
           list = formatList(docList2);
       }
       emitter.emit(
-          'update2',
+          'update',
           { action: 'ADD', id: id, rev: rev, doc: doc },
           list
       );
