@@ -1,5 +1,12 @@
 import { isRemote } from 'pouchdb-utils';
 var EventEmitter = require('events');
+var selectorCore = require('pouchdb-selector-core');
+var utils = require('./utils');
+var massageSelector = selectorCore.massageSelector;
+var massageSort = utils.massageSort;
+
+
+
 //import * as EventEmitter from 'events';
 
 (function() {
@@ -142,13 +149,39 @@ var EventEmitter = require('events');
                 var emitter = new EventEmitter();
                 var docList = [];
 
+                // Normalize the request options
+                var fields = requestDef.fields;
+                if (fields) {
+                    // _id is a necessary field to process the docs
+                    if (fields.indexOf('_id') === -1) {
+                        fields.unshift('_id');
+                    }
+                    // We need the _rev to sort out changes but can strip it later
+                    if (fields.indexOf('_rev') === -1) {
+                        fields.push('_rev');
+                    }
+                }
+
+                var selector;
+                if (requestDef.selector) {
+                    selector = massageSelector(requestDef.selector);
+                }
+                var sort, sortFn;
+                if (requestDef.sort) {
+                    sort = massageSort(requestDef.sort);
+                    sortFn = helpers.createFieldSorter(sort);
+                }
+                //var skip = parseInt(requestDef.skip, 10) || 0;
+                //var limit = parseInt(requestDef.limit, 10) || 0;
+
                 var findRequest = {
-                    selector: requestDef.selector,
-                    sort: requestDef.sort,
-                    fields: requestDef.fields,
+                    selector: selector,
+                    sort: sort,
+                    fields: fields,
                 };
 
                 var first = requestDef.first;
+                console.log('first find request.');
                 var ready = processChange();
 
                 // We will use just one change listener for all live queries.
@@ -246,7 +279,8 @@ var EventEmitter = require('events');
 
                     docList = docList.concat(doc);
 
-                    if (first && docList) { //aggregate) {
+                    if (first && docList) {
+                        //aggregate) {
                         vm.$data[key] = docList[0];
                     } else {
                         vm.$data[key] = docList;
@@ -287,12 +321,12 @@ var EventEmitter = require('events');
                 //     throw err;
                 // });
 
-
                 function processChange() {
                     // just use find
                     console.time('RegularFind');
 
-                    let prom = db.find(findRequest)
+                    let prom = db
+                        .find(findRequest)
                         .then(function(results) {
                             // clear docList and create a new array
                             docList = [];
@@ -301,12 +335,12 @@ var EventEmitter = require('events');
                                 addResult(doc);
                             });
                             vm.$data[key] = docList; //aggregateCache;
-        
+
                             vm.$emit('pouchdb-livefeed-ready', {
                                 db: key,
                                 name: db.name,
                             });
-        
+
                             // docList = [];
                             // results.docs.forEach(function(doc) {
                             //     addResult(doc);
