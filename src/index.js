@@ -1,5 +1,6 @@
 import { isRemote } from 'pouchdb-utils';
-import { liveFind } from './newchanges';
+var EventEmitter = require('events');
+//import * as EventEmitter from 'events';
 
 (function() {
     let vue = null,
@@ -21,12 +22,17 @@ import { liveFind } from './newchanges';
          */
         data(vm) {
             let pouchOptions = vm.$options.pouch;
-            if (typeof pouchOptions === 'undefined' || pouchOptions === null) return {};
-            if (typeof pouchOptions === 'function') pouchOptions = pouchOptions(vm);
-            return Object.keys(pouchOptions).reduce((accumulator, currentValue) => {
-                accumulator[currentValue] = null;
-                return accumulator
-            }, {});
+            if (typeof pouchOptions === 'undefined' || pouchOptions === null)
+                return {};
+            if (typeof pouchOptions === 'function')
+                pouchOptions = pouchOptions(vm);
+            return Object.keys(pouchOptions).reduce(
+                (accumulator, currentValue) => {
+                    accumulator[currentValue] = null;
+                    return accumulator;
+                },
+                {}
+            );
         },
 
         // lifecycle hooks for mixin
@@ -49,11 +55,9 @@ import { liveFind } from './newchanges';
 
             function fetchSession(db = databases[defaultDB]) {
                 return new Promise(resolve => {
-                    db
-                        .getSession()
+                    db.getSession()
                         .then(session => {
-                            db
-                                .getUser(session.userCtx.name)
+                            db.getUser(session.userCtx.name)
                                 .then(userData => {
                                     let userObj = Object.assign(
                                         {},
@@ -77,12 +81,9 @@ import { liveFind } from './newchanges';
 
             function login(db = databases[defaultDB]) {
                 return new Promise(resolve => {
-
-                    db
-                        .logIn(defaultUsername, defaultPassword)
+                    db.logIn(defaultUsername, defaultPassword)
                         .then(user => {
-                            db
-                                .getUser(user.name)
+                            db.getUser(user.name)
                                 .then(userData => {
                                     let userObj = Object.assign(
                                         {},
@@ -107,17 +108,13 @@ import { liveFind } from './newchanges';
             function makeInstance(db, options = {}) {
                 // Merge the plugin optionsDB options with those passed in
                 // when creating pouch dbs.
-                // Note: default opiontsDB options are passed in when creating 
+                // Note: default opiontsDB options are passed in when creating
                 // both local and remote pouch databases. E.g. modifying fetch()
                 // in the options is only useful for remote Dbs but will be passed
                 // for local pouch dbs too if set in optionsDB.
                 // See: https://pouchdb.com/api.html#create_database
-            
-                let _options = Object.assign(
-                    {},
-                    optionsDB,
-                    options
-                )
+
+                let _options = Object.assign({}, optionsDB, options);
 
                 databases[db] = new pouch(db, _options);
                 registerListeners(databases[db]);
@@ -138,9 +135,204 @@ import { liveFind } from './newchanges';
                 });
             }
 
+            // liveFind stuff
+
+            function liveFind(db, requestDef, key) {
+                var cancelled = false;
+                var emitter = new EventEmitter();
+                var docList = [];
+
+                var findRequest = {
+                    selector: requestDef.selector,
+                    sort: requestDef.sort,
+                    fields: requestDef.fields,
+                };
+
+                var first = requestDef.first;
+                var ready = processChange();
+
+                // We will use just one change listener for all live queries.
+                // We need to keep track of how many queries are running.
+                // When the last live query finishes we will cancel the listener.
+                if (!db._changeListener) {
+                    listen();
+                }
+                if (!db._activeQueries) {
+                    db._activeQueries = 1;
+                } else {
+                    db._activeQueries++;
+                }
+
+                db._changeListener
+                    .on('change', changeHandler)
+                    .on('error', errorHandler);
+
+                emitter.cancel = cancel;
+                // Bind the `find` query promise to our emitter object
+                // so we know when the initial query is done and can catch errors
+                emitter.then = ready.then.bind(ready);
+                emitter.catch = ready.catch.bind(ready);
+
+                emitter.sort = function(list) {
+                    if (!sort) {
+                        return list;
+                    }
+                    return sortList(list);
+                };
+
+                // what is this??? is it used by pouch-vue?????
+                //emitter.paginate = paginate;
+
+                function changeHandler(change) {
+                    ready.then(function() {
+                        //if (change.doc) {
+                        //    processChange(change.doc);
+                        //}
+                        processChange();
+                    });
+                }
+
+                function errorHandler(err) {
+                    vm.$emit('pouchdb-livefeed-error', {
+                        db: key,
+                        name: db.name,
+                        error: err,
+                    });
+                    //emitter.emit('error', err);
+                }
+
+                function cancel() {
+                    console.log(emitter.eventNames());
+                    console.log('Max listeners: ', emitter.getMaxListeners());
+                    if (!cancelled) {
+                        db._activeQueries--;
+                        if (!db._activeQueries) {
+                            db._changeListener.cancel();
+                            delete db._changeListener;
+                        } else {
+                            db._changeListener.removeListener(
+                                'change',
+                                changeHandler
+                            );
+                            db._changeListener.removeListener(
+                                'error',
+                                errorHandler
+                            );
+                        }
+
+                        vm.$emit('pouchdb-livefeed-cancel', {
+                            db: key,
+                            name: db.name,
+                        });
+                        //emitter.emit('cancelled');
+                        emitter.removeAllListeners();
+                        cancelled = true;
+                    }
+                }
+
+                function listen() {
+                    db._changeListener = db.changes({
+                        live: true,
+                        retry: true,
+                        include_docs: true,
+                        since: 'now',
+                    });
+                }
+
+                // This processes the initial results of the query
+                function addResult(doc) {
+                    //var id = doc._id;
+                    //var rev = doc._rev;
+
+                    docList = docList.concat(doc);
+
+                    if (first && docList) { //aggregate) {
+                        vm.$data[key] = docList[0];
+                    } else {
+                        vm.$data[key] = docList;
+                    }
+                    //vm.$data[key] = aggregateCache = aggregate;
+
+                    vm.$emit('pouchdb-livefeed-update', {
+                        db: key,
+                        name: db.name,
+                    });
+
+                    // emitter.emit(
+                    //     'update',
+                    //     { action: 'ADD', id: id, rev: rev, doc: doc },
+                    //     list
+                    // );
+                }
+
+                // var ready = db
+                // .find(findRequest)
+                // .then(function(results) {
+                //     results.docs.forEach(function(doc) {
+                //         addResult(doc);
+                //     });
+                //     vm.$data[key] = docList; //aggregateCache;
+
+                //     vm.$emit('pouchdb-livefeed-ready', {
+                //         db: key,
+                //         name: db.name,
+                //     });
+                //     //emitter.emit('ready');
+                // })
+                // .catch(function(err) {
+                //     errorHandler(err);
+
+                //     //emitter.emit('error', err);
+                //     cancel();
+                //     throw err;
+                // });
+
+
+                function processChange() {
+                    // just use find
+                    console.time('RegularFind');
+
+                    let prom = db.find(findRequest)
+                        .then(function(results) {
+                            // clear docList and create a new array
+                            docList = [];
+
+                            results.docs.forEach(function(doc) {
+                                addResult(doc);
+                            });
+                            vm.$data[key] = docList; //aggregateCache;
+        
+                            vm.$emit('pouchdb-livefeed-ready', {
+                                db: key,
+                                name: db.name,
+                            });
+        
+                            // docList = [];
+                            // results.docs.forEach(function(doc) {
+                            //     addResult(doc);
+                            // });
+                            // emitter.emit('ready');
+
+                            console.timeEnd('RegularFind');
+                        })
+                        .catch(function(err) {
+                            console.timeEnd('RegularFind');
+                            errorHandler(err);
+                            //emitter.emit('error', err);
+                            cancel();
+                            throw err;
+                        });
+
+                    //console.timeEnd('RegularFind');
+                    return prom;
+                }
+
+                return emitter;
+            }
+
             let $pouch = {
                 version: '__VERSION__',
-                connect(username, password, db=defaultDB) {
+                connect(username, password, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -178,7 +370,7 @@ import { liveFind } from './newchanges';
                             });
                         });
                 },
-                putUser(username, metadata = {}, db=defaultDB) {
+                putUser(username, metadata = {}, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -192,19 +384,17 @@ import { liveFind } from './newchanges';
                             });
                         });
                 },
-                deleteUser(username, db=defaultDB) {
+                deleteUser(username, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
-                    return databases[db]
-                        .deleteUser(username)
-                        .catch(error => {
-                            return new Promise(resolve => {
-                                resolve(error);
-                            });
+                    return databases[db].deleteUser(username).catch(error => {
+                        return new Promise(resolve => {
+                            resolve(error);
                         });
+                    });
                 },
-                changePassword(username, password, db=defaultDB) {
+                changePassword(username, password, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -216,7 +406,7 @@ import { liveFind } from './newchanges';
                             });
                         });
                 },
-                changeUsername(oldUsername, newUsername, db=defaultDB) {
+                changeUsername(oldUsername, newUsername, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -228,7 +418,7 @@ import { liveFind } from './newchanges';
                             });
                         });
                 },
-                signUpAdmin(adminUsername, adminPassword, db=defaultDB) {
+                signUpAdmin(adminUsername, adminPassword, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -240,7 +430,7 @@ import { liveFind } from './newchanges';
                             });
                         });
                 },
-                deleteAdmin(adminUsername, db=defaultDB) {
+                deleteAdmin(adminUsername, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -252,7 +442,7 @@ import { liveFind } from './newchanges';
                             });
                         });
                 },
-                disconnect(db=defaultDB) {
+                disconnect(db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -284,7 +474,7 @@ import { liveFind } from './newchanges';
                     });
                 },
 
-                destroy(db=defaultDB) {
+                destroy(db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -300,7 +490,7 @@ import { liveFind } from './newchanges';
                     pouch.defaults(options);
                 },
 
-                close(db=defaultDB) {
+                close(db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -312,7 +502,7 @@ import { liveFind } from './newchanges';
                     });
                 },
 
-                getSession(db=defaultDB) {
+                getSession(db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -328,7 +518,7 @@ import { liveFind } from './newchanges';
                     return fetchSession(databases[db]);
                 },
 
-                sync(localDB, remoteDB=defaultDB, options = {}) {
+                sync(localDB, remoteDB = defaultDB, options = {}) {
                     if (!databases[localDB]) {
                         makeInstance(localDB);
                     }
@@ -363,9 +553,7 @@ import { liveFind } from './newchanges';
                                     error: err,
                                 });
                                 return;
-                            }
-                            else {
-
+                            } else {
                                 vm.$emit('pouchdb-sync-paused', {
                                     db: localDB,
                                     paused: true,
@@ -405,7 +593,7 @@ import { liveFind } from './newchanges';
 
                     return sync;
                 },
-                push(localDB, remoteDB=defaultDB, options = {}) {
+                push(localDB, remoteDB = defaultDB, options = {}) {
                     if (!databases[localDB]) {
                         makeInstance(localDB);
                     }
@@ -440,8 +628,7 @@ import { liveFind } from './newchanges';
                                     error: err,
                                 });
                                 return;
-                            }
-                            else {
+                            } else {
                                 vm.$emit('pouchdb-push-paused', {
                                     db: localDB,
                                     paused: true,
@@ -482,7 +669,7 @@ import { liveFind } from './newchanges';
                     return rep;
                 },
 
-                pull(localDB, remoteDB=defaultDB, options = {}) {
+                pull(localDB, remoteDB = defaultDB, options = {}) {
                     if (!databases[localDB]) {
                         makeInstance(localDB);
                     }
@@ -517,8 +704,7 @@ import { liveFind } from './newchanges';
                                     error: err,
                                 });
                                 return;
-                            }
-                            else {
+                            } else {
                                 vm.$emit('pouchdb-pull-paused', {
                                     db: localDB,
                                     paused: true,
@@ -559,7 +745,7 @@ import { liveFind } from './newchanges';
                     return rep;
                 },
 
-                changes(options = {}, db=defaultDB) {
+                changes(options = {}, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -603,42 +789,42 @@ import { liveFind } from './newchanges';
                     return changes;
                 },
 
-                get(object, options = {}, db=defaultDB) {
+                get(object, options = {}, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
                     return databases[db].get(object, options);
                 },
 
-                put(object, options = {}, db=defaultDB) {
+                put(object, options = {}, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
                     return databases[db].put(object, options);
                 },
 
-                post(object, options = {}, db=defaultDB) {
+                post(object, options = {}, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
                     return databases[db].post(object, options);
                 },
 
-                remove(object, options = {}, db=defaultDB) {
+                remove(object, options = {}, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
                     return databases[db].remove(object, options);
                 },
 
-                query(fun, options = {}, db=defaultDB) {
+                query(fun, options = {}, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
                     return databases[db].query(fun, options);
                 },
 
-                find(options, db=defaultDB) {
+                find(options, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -646,7 +832,7 @@ import { liveFind } from './newchanges';
                     return databases[db].find(options);
                 },
 
-                createIndex(index, db=defaultDB) {
+                createIndex(index, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -654,7 +840,7 @@ import { liveFind } from './newchanges';
                     return databases[db].createIndex(index);
                 },
 
-                allDocs(options = {}, db=defaultDB) {
+                allDocs(options = {}, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -668,7 +854,7 @@ import { liveFind } from './newchanges';
                     return databases[db].allDocs(_options);
                 },
 
-                bulkDocs(docs, options = {}, db=defaultDB) {
+                bulkDocs(docs, options = {}, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -676,7 +862,7 @@ import { liveFind } from './newchanges';
                     return databases[db].bulkDocs(docs, options);
                 },
 
-                compact(options = {}, db=defaultDB) {
+                compact(options = {}, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -684,7 +870,7 @@ import { liveFind } from './newchanges';
                     return databases[db].compact(options);
                 },
 
-                viewCleanup(db=defaultDB) {
+                viewCleanup(db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -692,7 +878,7 @@ import { liveFind } from './newchanges';
                     return databases[db].viewCleanup();
                 },
 
-                info(db=defaultDB) {
+                info(db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -700,7 +886,7 @@ import { liveFind } from './newchanges';
                     return databases[db].info();
                 },
 
-                putAttachment(docId, rev, attachment, db=defaultDB) {
+                putAttachment(docId, rev, attachment, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -714,7 +900,7 @@ import { liveFind } from './newchanges';
                     );
                 },
 
-                getAttachment(docId, attachmentId, db=defaultDB) {
+                getAttachment(docId, attachmentId, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -722,7 +908,7 @@ import { liveFind } from './newchanges';
                     return databases[db].getAttachment(docId, attachmentId);
                 },
 
-                deleteAttachment(docId, attachmentId, docRev, db=defaultDB) {
+                deleteAttachment(docId, attachmentId, docRev, db = defaultDB) {
                     if (!databases[db]) {
                         makeInstance(db);
                     }
@@ -775,7 +961,6 @@ import { liveFind } from './newchanges';
                             return;
                         }
 
-
                         let selector, sort, skip, limit, first;
 
                         if (config.selector) {
@@ -801,6 +986,7 @@ import { liveFind } from './newchanges';
                             }
                             db = databases[databaseParam];
                         }
+
                         if (!db) {
                             vm.$emit('pouchdb-livefeed-error', {
                                 db: key,
@@ -811,49 +997,23 @@ import { liveFind } from './newchanges';
                         if (vm._liveFeeds[key]) {
                             vm._liveFeeds[key].cancel();
                         }
-                        let aggregateCache = [];
+                        //let aggregateCache = [];
+
+                        // attach the emitter to the db
 
                         // the LiveFind plugin returns a liveFeed object
-                        vm._liveFeeds[key] = liveFind(db, {
+                        vm._liveFeeds[key] = liveFind(
+                            db,
+                            {
                                 selector: selector,
                                 sort: sort,
                                 skip: skip,
                                 limit: limit,
                                 aggregate: true,
-                            })
-                            .on('update', (update, aggregate) => {
-                                if (first && aggregate)
-                                    aggregate = aggregate[0];
-
-                                vm.$data[key] = aggregateCache = aggregate;
-
-                                vm.$emit('pouchdb-livefeed-update', {
-                                    db: key,
-                                    name: db.name,
-                                });
-
-                            })
-                            .on('ready', () => {
-                                vm.$data[key] = aggregateCache;
-
-                                vm.$emit('pouchdb-livefeed-ready', {
-                                    db: key,
-                                    name: db.name,
-                                });
-                            })
-                            .on('cancelled', function() {
-                                vm.$emit('pouchdb-livefeed-cancel', {
-                                    db: key,
-                                    name: db.name,
-                                });
-                            })
-                            .on('error', function(err) {
-                                vm.$emit('pouchdb-livefeed-error', {
-                                    db: key,
-                                    name: db.name,
-                                    error: err,
-                                });
-                            });
+                                first: first,
+                            },
+                            key
+                        );
                     },
                     {
                         immediate: true,
@@ -872,6 +1032,8 @@ import { liveFind } from './newchanges';
     let api = {
         install: (Vue, options = {}) => {
             vue = Vue;
+
+            // TODO: pouchdb find required
 
             ({ pouch = PouchDB, defaultDB = '', optionsDB = {} } = options);
 
