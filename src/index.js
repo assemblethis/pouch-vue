@@ -1,9 +1,10 @@
 import { isRemote } from 'pouchdb-utils';
 var EventEmitter = require('events');
 var selectorCore = require('pouchdb-selector-core');
-var utils = require('./utils');
+//var utils = require('./utils');
 var massageSelector = selectorCore.massageSelector;
-var massageSort = utils.massageSort;
+//var massageSort = utils.massageSort;
+import {massageSort} from './utils';
 
 
 
